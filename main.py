@@ -202,10 +202,11 @@ def main(args):
 def train_nn(kf: KFold, dataset: ASRDataset):
     device = "cuda:0" if torch.cuda.is_available() else "cpu"
     loss_fn = nn.NLLLoss()
-
-    acc_per_fold = []
-    valid_loss_per_fold = []
     for index, (train_idx, valid_idx) in enumerate(kf.split(dataset)):
+        acc_per_fold = []
+        acc_per_fold_total = []
+        valid_loss_per_fold = []
+        valid_loss_per_fold_total = []
         print(f"Fold {index + 1}")
         train_subset = torch.utils.data.Subset(dataset, train_idx)
         valid_subset = torch.utils.data.Subset(dataset, valid_idx)
@@ -217,25 +218,30 @@ def train_nn(kf: KFold, dataset: ASRDataset):
         optimizer = optim.Adam(model.parameters(), lr=0.001)
         trainer = Trainer(device, model, optimizer, loss_fn, train_data=train_data, valid_data=valid_data)
         
-        for epoch in range(10):
+        for epoch in range(15):
             train_loss, valid_loss, valid_acc = trainer.train()
             print(f"Epoch {epoch + 1}: Train loss: {train_loss}, Valid loss: {valid_loss}, Valid acc: {valid_acc}")
-            if valid_acc > max(acc_per_fold):
+            valid_loss_per_fold.append(valid_loss)
+            valid_loss_per_fold_total.append(valid_loss)
+            acc_per_fold.append(valid_acc)
+            acc_per_fold_total.append(valid_acc)
+            if valid_acc >= max(acc_per_fold):
                 torch.save(model.state_dict(), "best_model.pth")
             
-            valid_loss_per_fold.append(valid_loss)
-            acc_per_fold.append(valid_acc)
+
     
-    plt.title("Loss and acc")
-    plt.plot(valid_loss_per_fold)
-    plt.plot(acc_per_fold)
-    plt.legend(["Loss", "Acc"])
-    plt.xlabel("Epoch")
-    plt.show()
-    plt.savefig("loss_acc.png")
-    
-    print(f"Average acc: {np.mean(acc_per_fold)}")
-    print(f"Average valid loss: {np.mean(valid_loss_per_fold)}")
+        plt.title("Loss and acc")
+        plt.plot(valid_loss_per_fold)
+        plt.plot(acc_per_fold)
+        plt.legend(["Loss", "Acc"])
+        plt.xlabel("Epoch")
+        plt.savefig(f"nn_loss_acc{index+1}.png")
+        # plt.show()
+        plt.close()
+        print(f"Average acc: {np.mean(acc_per_fold)}")
+        print(f"Average valid loss: {np.mean(valid_loss_per_fold)}")
+    print(f"Total Average acc: {np.mean(acc_per_fold_total)}")
+    print(f"Total Average valid loss: {np.mean(valid_loss_per_fold_total)}")
 
 def fit_kmeans(class_to_mfcc: dict[int, list[np.ndarray]]):
     kmeans = KMeans(n_clusters=64, random_state=42)
@@ -326,4 +332,6 @@ if __name__ == "__main__":
     arg_parser.add_argument("--model", type=str, default="nn")
     arg_parser.add_argument("--kfold", type=int, default=5)
     args = arg_parser.parse_args()
+
+    main(args)
     

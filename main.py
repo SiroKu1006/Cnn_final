@@ -11,6 +11,8 @@ import torch.nn.functional as F
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
 
+import matplotlib.pyplot as plt
+
 import numpy as np
 from sklearn.cluster import KMeans
 from sklearn.model_selection import KFold
@@ -218,8 +220,19 @@ def train_nn(kf: KFold, dataset: ASRDataset):
         for epoch in range(10):
             train_loss, valid_loss, valid_acc = trainer.train()
             print(f"Epoch {epoch + 1}: Train loss: {train_loss}, Valid loss: {valid_loss}, Valid acc: {valid_acc}")
+            if valid_acc > max(acc_per_fold):
+                torch.save(model.state_dict(), "best_model.pth")
+            
             valid_loss_per_fold.append(valid_loss)
             acc_per_fold.append(valid_acc)
+    
+    plt.title("Loss and acc")
+    plt.plot(valid_loss_per_fold)
+    plt.plot(acc_per_fold)
+    plt.legend(["Loss", "Acc"])
+    plt.xlabel("Epoch")
+    plt.show()
+    plt.savefig("loss_acc.png")
     
     print(f"Average acc: {np.mean(acc_per_fold)}")
     print(f"Average valid loss: {np.mean(valid_loss_per_fold)}")
@@ -314,4 +327,3 @@ if __name__ == "__main__":
     arg_parser.add_argument("--kfold", type=int, default=5)
     args = arg_parser.parse_args()
     
-    main(args)

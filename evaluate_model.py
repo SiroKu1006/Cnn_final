@@ -95,7 +95,6 @@ def evaluate_model(model, test_data_dir, device):
                 with torch.no_grad():
                     output = model(mfcc)
                     predicted_label = output.argmax(dim=1).item()
-                print(f"檔案: {file_name} 真實標籤: {true_label}, 預測標籤: {predicted_label}")
                 # 記錄真實標籤與預測標籤
                 true_labels.append(true_label)
                 predicted_labels.append(predicted_label)
@@ -103,7 +102,7 @@ def evaluate_model(model, test_data_dir, device):
     # 生成混淆矩陣
     cm = confusion_matrix(true_labels, predicted_labels, labels=np.arange(10))
     cm_percentage = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis] * 100  # 轉換為百分比
-
+    print(f"辨識正確率為: {np.trace(cm) / np.sum(cm) * 100:.2f}%")
     # 繪製混淆矩陣
     disp = ConfusionMatrixDisplay(confusion_matrix=cm_percentage, display_labels=np.arange(10))
     disp.plot(cmap="Blues", xticks_rotation='vertical')
@@ -112,6 +111,7 @@ def evaluate_model(model, test_data_dir, device):
     plt.ylabel("True Label")
     plt.xlabel("Predicted Label")
     plt.show()
+    
 
 
 
@@ -119,7 +119,7 @@ def evaluate_model(model, test_data_dir, device):
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_path = "best_model_10.pth"
-    test_data_dir = "train_audio_cnn"  # 測試資料目錄
+    test_data_dir = "test_audio_cnn"  # 測試資料目錄
 
     # 載入模型
     model = load_model(model_path, device)

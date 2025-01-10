@@ -1,11 +1,13 @@
 import os
 import argparse
+import random
 from typing import Optional, Union
 from tqdm import tqdm
 
 import torchaudio
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import optim
 from torch.utils.data import Dataset, DataLoader
 
@@ -24,14 +26,14 @@ class ASRNet(nn.Module):
         self.max_pool = nn.MaxPool2d(kernel_size=(2, 2))
         self.drop_1 = nn.Dropout(0.35)
         self.flatten = nn.Flatten()
-        self.linear = nn.Linear(32 * 40 * 25, 128)
+        self.linear = nn.Linear(32 * 20 * 50, 128)
         self.active_2 = nn.ReLU()
         self.drop_2 = nn.Dropout(0.25)
         self.classify = nn.Linear(128, 10)
     
     def forward(self, x):
         x = self.conv2d(x)
-        x = self.active_2(x)
+        x = self.active_1(x)
         x = self.max_pool(x)
         x = self.drop_1(x)
         x = self.flatten(x)
@@ -55,6 +57,9 @@ class ASRDataset(Dataset):
     def __getitem__(self, index):
         audio_file_path = self.data[index][0]
         waveform, sample_rate = torchaudio.load(audio_file_path)
+        
+        time_mask = torchaudio.transforms.TimeMasking(time_mask_param=5)
+        freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param=2)
         mfcc_transform = torchaudio.transforms.MFCC(
             melkwargs={"n_fft": 400, "hop_length": 160, "n_mels": 64}
         )
@@ -65,6 +70,12 @@ class ASRDataset(Dataset):
 
         mfcc = mfcc_transform(waveform)
         mfcc = mfcc[0]
+        
+        if random.random() < 0.5:
+            mfcc = time_mask(mfcc)
+        if random.random() < 0.5:
+            mfcc = freq_mask(mfcc)
+        
         # Pad/truncate along the time dimension
         time_frames = mfcc.shape[1]
 
@@ -133,6 +144,8 @@ class Trainer:
             label = batch[1]
             
             hypo = self.model(input_ids)
+            hypo = F.log_softmax(hypo, dim=1)
+            label = label.argmax(dim=1)
             loss = self.loss_fn(hypo, label)
             
             loss.backward()
@@ -164,22 +177,24 @@ class Trainer:
             label = batch[1]
             
             hypo = self.model(input_ids)
+            hypo = F.log_softmax(hypo, dim=1)
+            label = label.argmax(dim=1)
             loss += self.loss_fn(hypo, label)
             
-            acc += (hypo.argmax(dim=1) == label.argmax(dim=1)).sum().item() / len(label)
+            acc += (hypo.argmax(dim=1) == label).sum().item() / len(label)
             pbar.update(1)
         pbar.close()
         
         return loss / len(self.valid_data), acc / len(self.valid_data)
 
 def train_nn():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
     model = ASRNet().to(device)
     optimizer = optim.AdamW(model.parameters(), lr=0.001)
-    loss_fn = nn.CrossEntropyLoss()
+    loss_fn = nn.NLLLoss()
     
     dataset = ASRDataset()
-    kf = KFold(n_splits=10)
+    kf = KFold(n_splits=5,shuffle=True)
 
     trainer = Trainer(device, model, optimizer, loss_fn)
     for epoch in range(100):
@@ -191,6 +206,7 @@ def train_nn():
             trainer.set_train_data(train_data)
             trainer.set_valid_data(valid_data)
             train_loss, valid_loss, valid_acc = trainer.train()
+            
             print(f"Epoch: {epoch}, Train Loss: {train_loss}, Valid Loss: {valid_loss}, Valid Acc: {valid_acc}")
 
 def train_hmm():

@@ -21,33 +21,28 @@ from hmmlearn import hmm
 class ASRNet(nn.Module):
     def __init__(self):
         super().__init__()
-        self.conv2d = nn.Conv2d(1, 32, kernel_size=(2, 2), padding="same")
-        self.active_1 = nn.ReLU()
-        self.max_pool = nn.MaxPool2d(kernel_size=(2, 2))
-        self.drop_1 = nn.Dropout(0.35)
-        self.flatten = nn.Flatten()
-        self.linear = nn.Linear(32 * 20 * 50, 128)
-        self.active_2 = nn.ReLU()
-        self.drop_2 = nn.Dropout(0.25)
-        self.classify = nn.Linear(128, 10)
+        self.net = nn.Sequential(
+            nn.Conv2d(1, 32, kernel_size=(2, 2), padding="same"),
+            nn.ReLU(),
+            nn.MaxPool2d(kernel_size=(2, 2)),
+            nn.Dropout(0.2),
+            nn.Flatten(),
+            nn.Linear(32 * 20 * 50, 128),
+            nn.ReLU(),
+            nn.Dropout(0.1),
+            nn.Linear(128, 10)
+        )
     
     def forward(self, x):
-        x = self.conv2d(x)
-        x = self.active_1(x)
-        x = self.max_pool(x)
-        x = self.drop_1(x)
-        x = self.flatten(x)
-        x = self.linear(x)
-        x = self.active_2(x)
-        x = self.drop_2(x)
-        y = self.classify(x)
+        y = self.net(x)
         
         return y
 
 
 class ASRDataset(Dataset):
-    def __init__(self):
+    def __init__(self, apply_augmentation: bool = False):
         super().__init__()
+        self.apply_augmentation = apply_augmentation
         self.target_num_frames = 100
         self.data = self.initialize_data()
     
@@ -58,8 +53,10 @@ class ASRDataset(Dataset):
         audio_file_path = self.data[index][0]
         waveform, sample_rate = torchaudio.load(audio_file_path)
         
-        time_mask = torchaudio.transforms.TimeMasking(time_mask_param=5)
-        freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param=2)
+        if self.apply_augmentation:
+            time_mask = torchaudio.transforms.TimeMasking(time_mask_param=5)
+            freq_mask = torchaudio.transforms.FrequencyMasking(freq_mask_param=2)
+        
         mfcc_transform = torchaudio.transforms.MFCC(
             melkwargs={"n_fft": 400, "hop_length": 160, "n_mels": 64}
         )
@@ -70,11 +67,13 @@ class ASRDataset(Dataset):
 
         mfcc = mfcc_transform(waveform)
         mfcc = mfcc[0]
+        mfcc = (mfcc - mfcc.mean()) / (mfcc.std() + 1e-6)
         
-        if random.random() < 0.5:
-            mfcc = time_mask(mfcc)
-        if random.random() < 0.5:
-            mfcc = freq_mask(mfcc)
+        if self.apply_augmentation:
+            if random.random() < 0.5:
+                mfcc = time_mask(mfcc)
+            if random.random() < 0.5:
+                mfcc = freq_mask(mfcc)
         
         # Pad/truncate along the time dimension
         time_frames = mfcc.shape[1]
@@ -149,9 +148,9 @@ class Trainer:
             loss = self.loss_fn(hypo, label)
             
             loss.backward()
-            total_train_loss += loss.item()
             self.optimizer.step()
             self.optimizer.zero_grad()
+            total_train_loss += loss.item()
             
             pbar.update(1)
         pbar.close()
@@ -187,41 +186,48 @@ class Trainer:
         
         return loss / len(self.valid_data), acc / len(self.valid_data)
 
-def train_nn():
-    device = "cuda:0" if torch.cuda.is_available() else "cpu"
-    model = ASRNet().to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=0.001)
-    loss_fn = nn.NLLLoss()
+def main(args):
+    kf = KFold(n_splits=args.kfold, shuffle=True)
+    dataset = ASRDataset(apply_augmentation=False)
     
-    dataset = ASRDataset()
-    kf = KFold(n_splits=5,shuffle=True)
+    if args.model == "nn":
+        train_nn(kf, dataset)
+    elif args.model == "hmm":
+        train_hmm(kf, dataset)
+    else:
+        raise ValueError("Invalid model type")
 
-    trainer = Trainer(device, model, optimizer, loss_fn)
-    for epoch in range(100):
-        for index, (train_index, valid_index) in enumerate(kf.split(dataset)):
-            print(f"Fold: {index + 1}")
-            train_data = DataLoader(dataset, batch_size=60, sampler=train_index, pin_memory=True)
-            valid_data = DataLoader(dataset, batch_size=60, sampler=valid_index, pin_memory=True)
-            
-            trainer.set_train_data(train_data)
-            trainer.set_valid_data(valid_data)
+def train_nn(kf: KFold, dataset: ASRDataset):
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    loss_fn = nn.NLLLoss()
+
+    acc_per_fold = []
+    valid_loss_per_fold = []
+    for index, (train_idx, valid_idx) in enumerate(kf.split(dataset)):
+        print(f"Fold {index + 1}")
+        train_subset = torch.utils.data.Subset(dataset, train_idx)
+        valid_subset = torch.utils.data.Subset(dataset, valid_idx)
+        
+        train_data = DataLoader(train_subset, batch_size=60, shuffle=True)
+        valid_data = DataLoader(valid_subset, batch_size=60, shuffle=False)
+        
+        model = ASRNet().to(device)
+        optimizer = optim.Adam(model.parameters(), lr=0.001)
+        trainer = Trainer(device, model, optimizer, loss_fn, train_data=train_data, valid_data=valid_data)
+        
+        for epoch in range(10):
             train_loss, valid_loss, valid_acc = trainer.train()
-            
-            print(f"Epoch: {epoch}, Train Loss: {train_loss}, Valid Loss: {valid_loss}, Valid Acc: {valid_acc}")
+            print(f"Epoch {epoch + 1}: Train loss: {train_loss}, Valid loss: {valid_loss}, Valid acc: {valid_acc}")
+            valid_loss_per_fold.append(valid_loss)
+            acc_per_fold.append(valid_acc)
+    
+    print(f"Average acc: {np.mean(acc_per_fold)}")
+    print(f"Average valid loss: {np.mean(valid_loss_per_fold)}")
 
-def train_hmm():
+def fit_kmeans(class_to_mfcc: dict[int, list[np.ndarray]]):
     kmeans = KMeans(n_clusters=64, random_state=42)
     
-    dataset = ASRDataset()
-    dataloader = DataLoader(dataset)
-    
-    class_to_mfcc = {i: [] for i in range(10)}
-    for batch in dataloader:
-        fearture, label = batch
-        scalar_label = label.squeeze(0).argmax().item()
-        fearture = fearture.squeeze(0).numpy().T
-        class_to_mfcc[scalar_label].append(fearture)
-    
+    # Process data for kmeans
     all_mfcc = []
     for label, seq in class_to_mfcc.items():
         for arr in seq:
@@ -230,12 +236,10 @@ def train_hmm():
     flattened_mfcc = np.concatenate(all_mfcc, axis=0)
     kmeans = kmeans.fit(flattened_mfcc)
     
-    class_to_discrete = {i: [] for i in range(10)}
-    for label, seq in class_to_mfcc.items():
-        for arr in seq:
-            discrete = kmeans.predict(arr).reshape(-1, 1)
-            class_to_discrete[label].append(discrete)
-    
+    return kmeans
+
+def fit_dhmm(class_to_discrete: dict[int, list[np.ndarray]]):
+    # Train DHMM
     label_to_hmm = {i: None for i in range(10)}
     for i in range(10):
         seq_list = class_to_discrete[i]
@@ -244,6 +248,48 @@ def train_hmm():
         hmm_model = hmm.CategoricalHMM(n_components=6, n_iter=100, random_state=42)
         hmm_model.fit(x, lengths)
         label_to_hmm[i] = hmm_model
+    
+    return label_to_hmm
+
+def train_hmm(kf: KFold, dataset: ASRDataset):
+    acc_per_fold = []
+    for index, (train_idx, valid_idx) in enumerate(kf.split(dataset)):
+        train_subset = torch.utils.data.Subset(dataset, train_idx)
+        valid_subset = torch.utils.data.Subset(dataset, valid_idx)
+        
+        train_data = DataLoader(train_subset, batch_size=1)
+        valid_data = DataLoader(valid_subset, batch_size=1)
+        
+        # Process data, pair label with mfcc using dictionary
+        class_to_mfcc = {i: [] for i in range(10)}
+        for batch in train_data:
+            fearture, label = batch
+            scalar_label = label.squeeze(0).argmax().item()
+            fearture = fearture.squeeze(0).numpy().T
+            class_to_mfcc[scalar_label].append(fearture)
+        
+        kmeans = fit_kmeans(class_to_mfcc)
+        
+        # Convert each mfcc to discrete for DHMM
+        class_to_discrete = {i: [] for i in range(10)}
+        for label, seq in class_to_mfcc.items():
+            for arr in seq:
+                discrete = kmeans.predict(arr).reshape(-1, 1)
+                class_to_discrete[label].append(discrete)
+        
+        label_to_hmm = fit_dhmm(class_to_discrete)
+        acc = 0.0
+        for batch in tqdm(valid_data):
+            mfcc, label = batch
+            mfcc = mfcc.squeeze(0).numpy().T
+            label = label.squeeze(0).argmax().item()
+            predict_label = classify(kmeans, mfcc, label_to_hmm)
+            acc += 1 if predict_label == label else 0
+        
+        acc_per_fold.append(acc / len(valid_data))
+        print(f"Acc: {acc / len(valid_data)}")
+    
+    print(np.mean(acc_per_fold))
 
 def classify(
     kmeans,
@@ -265,11 +311,7 @@ def classify(
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
     arg_parser.add_argument("--model", type=str, default="nn")
+    arg_parser.add_argument("--kfold", type=int, default=5)
     args = arg_parser.parse_args()
     
-    if args.model == "nn":
-        train_nn()
-    elif args.model == "hmm":
-        train_hmm()
-    else:
-        raise ValueError("Invalid model type")
+    main(args)

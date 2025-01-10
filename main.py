@@ -226,7 +226,7 @@ def train_nn(kf: KFold, dataset: ASRDataset):
             acc_per_fold.append(valid_acc)
             acc_per_fold_total.append(valid_acc)
             if valid_acc >= max(acc_per_fold):
-                torch.save(model.state_dict(), "best_model.pth")
+                torch.save(model.state_dict(), "best_model_10.pth")
             
 
     
@@ -235,7 +235,7 @@ def train_nn(kf: KFold, dataset: ASRDataset):
         plt.plot(acc_per_fold)
         plt.legend(["Loss", "Acc"])
         plt.xlabel("Epoch")
-        plt.savefig(f"nn_loss_acc{index+1}.png")
+        # plt.savefig(f"nn_loss_acc{index+1}.png")
         # plt.show()
         plt.close()
         print(f"Average acc: {np.mean(acc_per_fold)}")
@@ -244,6 +244,7 @@ def train_nn(kf: KFold, dataset: ASRDataset):
     print(f"Total Average valid loss: {np.mean(valid_loss_per_fold_total)}")
 
 def fit_kmeans(class_to_mfcc: dict[int, list[np.ndarray]]):
+    print("Fitting kmeans")
     kmeans = KMeans(n_clusters=64, random_state=42)
     
     # Process data for kmeans
@@ -262,9 +263,9 @@ def fit_dhmm(class_to_discrete: dict[int, list[np.ndarray]]):
     label_to_hmm = {i: None for i in range(10)}
     for i in range(10):
         seq_list = class_to_discrete[i]
-        x = np.concatenate(seq_list, axis=0)
+        x = np.concatenate(seq_list, axis=0).reshape(-1, 1)
         lengths = [len(s) for s in seq_list]
-        hmm_model = hmm.CategoricalHMM(n_components=6, n_iter=100, random_state=42)
+        hmm_model = hmm.CategoricalHMM(n_components=6, n_iter=100, random_state=42, n_features=64)
         hmm_model.fit(x, lengths)
         label_to_hmm[i] = hmm_model
     
@@ -282,18 +283,18 @@ def train_hmm(kf: KFold, dataset: ASRDataset):
         # Process data, pair label with mfcc using dictionary
         class_to_mfcc = {i: [] for i in range(10)}
         for batch in train_data:
-            fearture, label = batch
+            feature, label = batch
             scalar_label = label.squeeze(0).argmax().item()
-            fearture = fearture.squeeze(0).numpy().T
-            class_to_mfcc[scalar_label].append(fearture)
+            feature = feature.squeeze(0).numpy().T
+            class_to_mfcc[scalar_label].append(feature)
         
         kmeans = fit_kmeans(class_to_mfcc)
         
         # Convert each mfcc to discrete for DHMM
         class_to_discrete = {i: [] for i in range(10)}
-        for label, seq in class_to_mfcc.items():
-            for arr in seq:
-                discrete = kmeans.predict(arr).reshape(-1, 1)
+        for label, mfcc_list in class_to_mfcc.items():
+            for mfcc in mfcc_list:
+                discrete = kmeans.predict(mfcc).reshape(-1, 1)
                 class_to_discrete[label].append(discrete)
         
         label_to_hmm = fit_dhmm(class_to_discrete)
@@ -329,9 +330,8 @@ def classify(
 
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser()
-    arg_parser.add_argument("--model", type=str, default="nn")
-    arg_parser.add_argument("--kfold", type=int, default=5)
+    arg_parser.add_argument("--model", type=str, default="hmm")
+    arg_parser.add_argument("--kfold", type=int, default=10)
     args = arg_parser.parse_args()
-
-    main(args)
     
+    main(args)

@@ -60,28 +60,33 @@ def evaluate_model(model, test_data_dir, device):
     """
     使用模型對測試資料進行評估，並生成混淆矩陣（以百分比表示）。
     :param model: 已載入的模型。
-    :param test_data_dir: 測試資料目錄，包含以數字為名稱的子資料夾。
+    :param test_data_dir: 測試資料目錄，包含 .wav 檔案。
     :param device: 運行設備。
     """
     true_labels = []
     predicted_labels = []
 
-    # 遍歷測試資料目錄（包括子資料夾）
-    for label_folder in os.listdir(test_data_dir):
-        folder_path = os.path.join(test_data_dir, label_folder)
+    # 遍歷主資料夾及其子資料夾
+    for folder_name in os.listdir(test_data_dir):
+        folder_path = os.path.join(test_data_dir, folder_name)
         if not os.path.isdir(folder_path):
             continue  # 忽略非資料夾的內容
 
-        # 確認子資料夾名稱是否為數字
-        if not label_folder.isdigit():
-            print(f"跳過無效資料夾: {label_folder}")
-            continue
-
-        true_label = int(label_folder)  # 將子資料夾名稱作為真實標籤
-
-        # 遍歷子資料夾中的音訊檔案
+        # 遍歷資料夾中的音訊檔案
         for file_name in os.listdir(folder_path):
             if file_name.lower().endswith(".wav"):
+                # 提取檔案名稱中的真實標籤 a 和序號 b
+                parts = file_name.split("_")
+                if len(parts) != 2 or not parts[1].lower().endswith(".wav"):
+                    print(f"跳過無效檔案: {file_name}")
+                    continue
+
+                try:
+                    true_label = int(parts[0])  # a 為真實標籤
+                except ValueError:
+                    print(f"跳過無效檔案: {file_name}")
+                    continue
+
                 audio_file = os.path.join(folder_path, file_name)
 
                 # 預處理音訊並進行推論
@@ -90,7 +95,8 @@ def evaluate_model(model, test_data_dir, device):
                 with torch.no_grad():
                     output = model(mfcc)
                     predicted_label = output.argmax(dim=1).item()
-
+                print(f"檔案: {file_name} 真實標籤: {true_label}, 預測標籤: {predicted_label}")
+                # 記錄真實標籤與預測標籤
                 true_labels.append(true_label)
                 predicted_labels.append(predicted_label)
 
@@ -109,10 +115,11 @@ def evaluate_model(model, test_data_dir, device):
 
 
 
+
 if __name__ == "__main__":
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model_path = "best_model_10.pth"
-    test_data_dir = "語音資料0_9"  # 測試資料目錄
+    test_data_dir = "train_audio_cnn"  # 測試資料目錄
 
     # 載入模型
     model = load_model(model_path, device)

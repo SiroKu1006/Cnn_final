@@ -5,3 +5,5 @@
 *.pth
 *.png
 *.ipynb
+*.xlsx
+*.csv
